@@ -14,6 +14,9 @@ import functools
 
 import numpy as np
 
+if not hasattr(np, 'int'):
+    np.int = int
+
 import torch
 import torch.nn as nn
 import torch._utils
@@ -541,7 +544,15 @@ def hrnet_w64(pretrained=False, **kwargs):
     fuse_method = ['sum', 'sum', 'sum', 'sum']
     model = HighResolutionNet(blocks, num_channels, num_modules, num_branches, num_blocks, fuse_method)
     if pretrained:
-        root = r'.torch\models\hrnetv2_w64_imagenet_pretrained.pth'
+        if isinstance(pretrained, str) and pretrained not in ['True', 'False']:
+            root = pretrained
+        else:
+            root = os.environ.get('HRNET_W64_PRETRAINED_PATH', r'.torch\models\hrnetv2_w64_imagenet_pretrained.pth')
+        if not os.path.exists(root):
+            raise FileNotFoundError(
+                'HRNet64 pretrained weights not found: %s. Set model.pretrain to a valid path or define HRNET_W64_PRETRAINED_PATH.'
+                % root
+            )
         old_dict = torch.load(root)
         model_dict = model.state_dict()
         for i,(k,v) in enumerate(old_dict.items()):

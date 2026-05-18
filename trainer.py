@@ -348,17 +348,25 @@ class Trainer(nn.Module):
         }
 
 
-    def save(self, snapshot_dir, epoch):
-        if isinstance(epoch,int):
-            model_name = os.path.join(snapshot_dir, 'model_%04d.pt' % (epoch + 1))
+    def save(self, snapshot_dir, epoch_or_name):
+        """
+        Save model and optimizer state.
+        
+        Args:
+            snapshot_dir: directory to save checkpoints
+            epoch_or_name: int (epoch number) or str ('best', 'last', or custom name)
+        """
+        if isinstance(epoch_or_name, int):
+            model_name = os.path.join(snapshot_dir, 'model_%04d.pt' % (epoch_or_name + 1))
             opt_name = os.path.join(snapshot_dir, 'optimizer.pt')
-            torch.save({'seg': self.model.state_dict()}, model_name)
-            torch.save({'seg': self.opt.state_dict()}, opt_name)
-        elif isinstance(epoch,str):
-            model_name = os.path.join(snapshot_dir, 'model_%s.pt' % epoch)
+        elif isinstance(epoch_or_name, str):
+            model_name = os.path.join(snapshot_dir, 'model_%s.pt' % epoch_or_name)
             opt_name = os.path.join(snapshot_dir, 'optimizer.pt')
-            torch.save({'seg': self.model.state_dict()}, model_name)
-            torch.save({'seg': self.opt.state_dict()}, opt_name)
+        else:
+            raise TypeError(f"epoch_or_name must be int or str, got {type(epoch_or_name)}")
+        
+        torch.save({'seg': self.model.state_dict()}, model_name)
+        torch.save({'seg': self.opt.state_dict()}, opt_name)
 
 
     def local_focal(self, pred, gt):

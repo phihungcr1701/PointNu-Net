@@ -37,5 +37,7 @@ train:
   use_mixed: false
   lambda_ins: 1                 # weight of image instance segmentation loss
   lambda_cate: 1                # weight of image category classification loss
+  val_interval: 30               # validation interval (every N epochs)
+  save_val_metrics_csv: true   # save validation metrics CSV per-epoch
 
-dataroot: /kaggle/input/PanNuke
+dataroot: /kaggle/input/datasets/phihungcrr1701/pannuke

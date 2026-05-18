@@ -15,6 +15,11 @@ from .imop import get_ins_info,gaussian_radius,draw_gaussian
 
 import matplotlib.pyplot as plt
 
+if not hasattr(np, 'float'):
+    np.float = float
+if not hasattr(np, 'bool'):
+    np.bool = bool
+
 
 def _resolve_pannuke_file(data_root, fold, filename):
     """Resolve PanNuke files from either the repo layout or the Kaggle layout.
