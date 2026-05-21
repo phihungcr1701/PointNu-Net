@@ -52,7 +52,8 @@ class Trainer(nn.Module):
 
 
         if config['train']['lr_policy'] == 'multistep':
-            max_epoch=config['train']['max_epoch']
+            # max_epoch=config['train']['max_epoch']
+            max_epoch = 100
             print(f'Multi step scheduler decay at {int(0.8*max_epoch)} and {int(0.9*max_epoch)} with gamma 0.1')
             self.scheduler = lr_scheduler.MultiStepLR(self.opt,milestones=[int(0.8*max_epoch),int(0.9*max_epoch)], gamma=0.1)
         elif config['train']['lr_policy'] == 'step':
@@ -69,6 +70,37 @@ class Trainer(nn.Module):
         self.mask_rescoring=config['mask_rescoring']
         self.ins_loss=BinaryDiceLoss()
         self.ce_loss=nn.BCEWithLogitsLoss(reduction='sum')
+
+    def load_checkpoint(self, checkpoint_path):
+        """Load model weights from checkpoint"""
+        state_dict = torch.load(checkpoint_path, map_location='cuda')
+        self.model.load_state_dict(state_dict['seg'])
+        print(f"✓ Model loaded: {checkpoint_path}")
+
+    def load_optimizer(self, optimizer_path):
+        """Load optimizer state from checkpoint"""
+        opt_state = torch.load(optimizer_path, map_location='cuda')
+        self.opt.load_state_dict(opt_state['seg'])
+        print(f"✓ Optimizer state loaded: {optimizer_path}")
+
+    def load_scheduler(self, scheduler_path):
+        """Load scheduler state from checkpoint (CRITICAL for correct LR decay)"""
+        sched_state = torch.load(scheduler_path, map_location='cuda')
+        self.scheduler.load_state_dict(sched_state['seg'])
+        print(f"✓ Scheduler state loaded: {scheduler_path}")
+        print(f"  → Scheduler will continue LR decay from saved state")
+
+    def save_checkpoint(self, checkpoint_dir, name='last'):
+        """Save model, optimizer, and scheduler state"""
+        model_path = os.path.join(checkpoint_dir, f'model_{name}.pt')
+        opt_path = os.path.join(checkpoint_dir, 'optimizer.pt')
+        sched_path = os.path.join(checkpoint_dir, 'scheduler.pt')
+        
+        torch.save({'seg': self.model.state_dict()}, model_path)
+        torch.save({'seg': self.opt.state_dict()}, opt_path)
+        torch.save({'seg': self.scheduler.state_dict()}, sched_path)
+        
+        return model_path, opt_path, sched_path
 
     def points_nms(self, heat, kernel=3):
         hmax = nn.functional.max_pool2d(heat, (kernel, kernel), stride=1, padding=(kernel)//2)

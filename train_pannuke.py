@@ -18,6 +18,14 @@ parser.add_argument('--test_fold', type=int, default=3)
 parser.add_argument('--output_dir', type=str, default='outputs')
 parser.add_argument('--seed', type=int, default=10)
 parser.add_argument('--val_interval', type=int, default=None)  # Override config if provided
+
+# Resume training arguments (for multi-session training on Kaggle)
+parser.add_argument('--resume', action='store_true', help='Resume training from checkpoint')
+parser.add_argument('--checkpoint_path', type=str, default=None, help='Full path to model checkpoint (model_best.pt or model_last.pt)')
+parser.add_argument('--optimizer_path', type=str, default=None, help='Full path to optimizer state file')
+parser.add_argument('--scheduler_path', type=str, default=None, help='Full path to scheduler state file')
+parser.add_argument('--training_log_path', type=str, default=None, help='Full path to training.log file')
+parser.add_argument('--start_epoch', type=int, default=None, help='Epoch to resume from (if not provided, will be read from log file)')
 opts = parser.parse_args()
 
 def check_manual_seed(seed):
@@ -55,19 +63,108 @@ if __name__ == '__main__':
     trainer.cuda()
     
     # Get validation interval from config or argument
-    val_interval = opts.val_interval if opts.val_interval is not None else config['train'].get('val_interval', 5)
-    print(f"Validation interval: every {val_interval} epochs")
+    val_interval = opts.val_interval if opts.val_interval is not None else config['train'].get('val_interval', 1)
+    print(f"\u2713 Validation interval: every {val_interval} epoch(s)")
     
-    # Initialize logger
-    logger = TrainingLogger(output_directory)
-    
+    # Initialize training state
+    start_epoch = 0
     best_mPQ = -1
     best_epoch = -1
+    logger = None
+    
+    # ===== RESUME LOGIC =====
+    if opts.resume:
+        print("\n" + "="*70)
+        print("RESUME MODE: Multi-Session Training")
+        print("="*70)
+        
+        # Validate all required paths are provided
+        required_args = {
+            'checkpoint_path': opts.checkpoint_path,
+            'optimizer_path': opts.optimizer_path,
+            'scheduler_path': opts.scheduler_path,
+            'training_log_path': opts.training_log_path
+        }
+        
+        for arg_name, arg_value in required_args.items():
+            if arg_value is None:
+                raise ValueError(f"--{arg_name} is required when using --resume")
+            if not os.path.exists(arg_value):
+                raise FileNotFoundError(f"{arg_name} not found: {arg_value}")
+            print(f"\u2713 {arg_name}: {arg_value}")
+        
+        # Load model, optimizer, scheduler
+        print("\n\u2192 Loading checkpoint...")
+        trainer.load_checkpoint(opts.checkpoint_path)
+        trainer.load_optimizer(opts.optimizer_path)
+        trainer.load_scheduler(opts.scheduler_path)
+        
+        # Parse training log to get start_epoch and best metrics
+        print("\n\u2192 Parsing training log...")
+        try:
+            with open(opts.training_log_path, 'r') as f:
+                lines = f.readlines()
+            
+            if len(lines) > 1:  # Has header + data
+                # Get start_epoch from explicit argument or from log
+                if opts.start_epoch is not None:
+                    start_epoch = opts.start_epoch
+                    print(f"\u2713 Start epoch from argument: {start_epoch}")
+                else:
+                    # Parse last line to get last completed epoch
+                    last_line = lines[-1].strip()
+                    parts = last_line.split(',')
+                    if len(parts) >= 1:
+                        last_completed_epoch = int(parts[0])
+                        start_epoch = last_completed_epoch + 1
+                        print(f"\u2713 Last completed epoch: {last_completed_epoch}")
+                        print(f"\u2713 Resuming from epoch: {start_epoch}")
+                
+                # Scan log to find best mPQ (column 4 in CSV)
+                for line in lines[1:]:  # Skip header
+                    parts = line.strip().split(',')
+                    if len(parts) >= 5 and parts[4]:  # Has val_mPQ
+                        try:
+                            val_mPQ = float(parts[4])
+                            epoch_num = int(parts[0])
+                            if val_mPQ > best_mPQ:
+                                best_mPQ = val_mPQ
+                                best_epoch = epoch_num
+                        except:
+                            pass
+                
+                if best_mPQ > -1:
+                    print(f"\u2713 Best metrics restored: epoch={best_epoch}, mPQ={best_mPQ:.6f}")
+                else:
+                    print(f"\u26a0 WARNING: No validation metrics found in log")
+            else:
+                print(f"\u26a0 WARNING: Log file is empty")
+                start_epoch = 0
+                
+        except Exception as e:
+            print(f"\u26a0 ERROR parsing log: {e}")
+            start_epoch = 0
+            best_mPQ = -1
+        
+        print("="*70 + "\n")
+    
+    # Initialize logger (append mode if resume, else create new)
+    logger = TrainingLogger(output_directory, resume=opts.resume, log_file_path=opts.training_log_path if opts.resume else None)
+    if opts.resume:
+        print(f"\u2713 Logger initialized in APPEND mode\n")
+    
     iter_per_epoch = len(train_loader)
     max_epoch = config['train']['max_epoch']
     
+    print(f"\n{'='*70}")
+    print(f"TRAINING CONFIGURATION")
+    print(f"{'='*70}")
+    print(f"Epochs: {start_epoch} → {max_epoch-1} ({max_epoch - start_epoch} total)")
+    print(f"Best mPQ: {best_mPQ if best_mPQ > -1 else 'N/A'} @ epoch {best_epoch if best_epoch > -1 else 'N/A'}")
+    print(f"{'='*70}\n")
+    
     # ===== TRAINING LOOP =====
-    for epoch in range(max_epoch):
+    for epoch in range(start_epoch, max_epoch):
         # --- Training phase ---
         train_loss_ins_list = []
         train_loss_cate_list = []
@@ -108,26 +205,65 @@ if __name__ == '__main__':
                 if is_best:
                     best_mPQ = val_mPQ
                     best_epoch = epoch
-                    trainer.save(checkpoint_directory, 'best')
-                    print(f"\n✓ NEW BEST MODEL at epoch {epoch}: mPQ={val_mPQ:.4f}")
+                    trainer.save_checkpoint(checkpoint_directory, name='best')
+                    print(f"\n✓ NEW BEST MODEL at epoch {epoch}: mPQ={val_mPQ:.6f}")
+                    if opts.resume:
+                        print(f"  → Checkpoint files ready for next session: model_best.pt, optimizer.pt, scheduler.pt")
         
         # --- Logging ---
         logger.log(epoch, iter_per_epoch, train_loss_ins_avg, train_loss_cate_avg,
                    val_mPQ, val_bPQ, is_best)
         
-        # --- Save last model ---
-        trainer.save(checkpoint_directory, 'last')
+        # --- Save last model (always) ---
+        trainer.save_checkpoint(checkpoint_directory, name='last')
         
         print(f"\n[Epoch {epoch}] train_loss_ins: {train_loss_ins_avg:.6f}, train_loss_cate: {train_loss_cate_avg:.6f}")
     
     # ===== TRAINING COMPLETE =====
     logger.close()
-    print(f"\n{'='*60}")
-    print(f"Training complete!")
-    print(f"Best epoch: {best_epoch}, Best mPQ: {best_mPQ:.4f}" if best_epoch >= 0 else "No validation performed")
-    print(f"Models saved in: {checkpoint_directory}")
-    print(f"Logs saved in: {os.path.join(output_directory, 'training.log')}")
-    print(f"{'='*60}")
+    print(f"\n{'='*70}")
+    print(f"✓ TRAINING SESSION COMPLETE")
+    print(f"{'='*70}")
+    
+    if opts.resume:
+        print(f"\n[MULTI-SESSION INFO]")
+        print(f"  Session type: RESUME")
+        print(f"  Epochs completed: {start_epoch} → {max_epoch-1}")
+        print(f"  Total epochs so far: {max_epoch}")
+        print(f"  Next session: Resume from epoch {max_epoch}")
+    else:
+        print(f"\n[NEW TRAINING SESSION]")
+        print(f"  Total epochs: {max_epoch}")
+    
+    print(f"\n[BEST MODEL]")
+    if best_epoch >= 0:
+        print(f"  Epoch: {best_epoch}")
+        print(f"  mPQ: {best_mPQ:.6f}")
+    else:
+        print(f"  No validation performed")
+    
+    print(f"\n[CHECKPOINT LOCATIONS]")
+    print(f"  model_best.pt: {os.path.join(checkpoint_directory, 'model_best.pt')}")
+    print(f"  model_last.pt: {os.path.join(checkpoint_directory, 'model_last.pt')}")
+    print(f"  optimizer.pt: {os.path.join(checkpoint_directory, 'optimizer.pt')}")
+    print(f"  scheduler.pt: {os.path.join(checkpoint_directory, 'scheduler.pt')}")
+    print(f"  training.log: {os.path.join(output_directory, 'training.log')}")
+    
+    if opts.resume or max_epoch > 30:
+        print(f"\n[NEXT STEP: CONTINUE TRAINING]")
+        print(f"  To resume in next session, use:")
+        print(f"  python train_pannuke.py \\")
+        print(f"    --name {opts.name} \\")
+        print(f"    --train_fold {opts.train_fold} \\")
+        print(f"    --val_fold {opts.val_fold} \\")
+        print(f"    --test_fold {opts.test_fold} \\")
+        print(f"    --resume \\")
+        print(f"    --checkpoint_path {os.path.join(checkpoint_directory, 'model_best.pt')} \\")
+        print(f"    --optimizer_path {os.path.join(checkpoint_directory, 'optimizer.pt')} \\")
+        print(f"    --scheduler_path {os.path.join(checkpoint_directory, 'scheduler.pt')} \\")
+        print(f"    --training_log_path {os.path.join(output_directory, 'training.log')}")
+    
+    print(f"\n{'='*70}\n")
 
 
 

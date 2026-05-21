@@ -46,17 +46,32 @@ def make_dataset(dir, max_dataset_size=float("inf")):
 class TrainingLogger:
     """Logger untuk training statistics (loss + validation metrics)"""
     
-    def __init__(self, output_dir):
+    def __init__(self, output_dir, resume=False, log_file_path=None):
         """
         Initialize logger.
         
         Args:
             output_dir: directory to save training.log
+            resume: if True, append to existing log; if False, create new
+            log_file_path: external path to log file (for Kaggle multi-session resume)
         """
-        self.log_file = os.path.join(output_dir, 'training.log')
+        if log_file_path:
+            self.log_file = log_file_path
+        else:
+            self.log_file = os.path.join(output_dir, 'training.log')
+        
         self.file_handle = None
         self.csv_writer = None
-        self._write_header()
+        self.resume = resume
+        
+        if resume and os.path.exists(self.log_file):
+            # Append mode: open existing file without rewriting header
+            self.file_handle = open(self.log_file, 'a', newline='')
+            self.csv_writer = csv.writer(self.file_handle)
+            print(f"\u2713 Logger appending to existing: {self.log_file}")
+        else:
+            # Create new log file with header
+            self._write_header()
     
     def _write_header(self):
         """Write CSV header"""
