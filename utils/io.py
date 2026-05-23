@@ -3,6 +3,7 @@ import yaml
 import csv
 from datetime import datetime
 import subprocess
+import shutil
 import sys
 import numpy as np
 import torch
@@ -45,71 +46,104 @@ def make_dataset(dir, max_dataset_size=float("inf")):
 
 class TrainingLogger:
     """Logger untuk training statistics (loss + validation metrics)"""
-    
+
     def __init__(self, output_dir, resume=False, log_file_path=None):
         """
         Initialize logger.
-        
+
         Args:
             output_dir: directory to save training.log
-            resume: if True, append to existing log; if False, create new
-            log_file_path: external path to log file (for Kaggle multi-session resume)
+            resume: if True, append to existing log
+            log_file_path: external path to old log file
         """
-        if log_file_path:
-            self.log_file = log_file_path
-        else:
-            self.log_file = os.path.join(output_dir, 'training.log')
-        
+
+        os.makedirs(output_dir, exist_ok=True)
+
+        # ALWAYS use writable output directory
+        self.log_file = os.path.join(output_dir, 'training.log')
+
         self.file_handle = None
         self.csv_writer = None
         self.resume = resume
-        
-        if resume and os.path.exists(self.log_file):
-            # Append mode: open existing file without rewriting header
-            self.file_handle = open(self.log_file, 'a', newline='')
-            self.csv_writer = csv.writer(self.file_handle)
-            print(f"\u2713 Logger appending to existing: {self.log_file}")
+
+        # ===== RESUME MODE =====
+        if resume:
+
+            # Copy old log to writable location
+            if log_file_path is not None:
+
+                if not os.path.exists(log_file_path):
+                    raise FileNotFoundError(
+                        f"Resume log file not found: {log_file_path}"
+                    )
+
+                # Copy only if destination doesn't exist
+                if not os.path.exists(self.log_file):
+                    shutil.copy(log_file_path, self.log_file)
+                    print(f"✓ Copied old log:")
+                    print(f"  from: {log_file_path}")
+                    print(f"  to:   {self.log_file}")
+
+            # Open copied log in append mode
+            if os.path.exists(self.log_file):
+                self.file_handle = open(self.log_file, 'a', newline='')
+                self.csv_writer = csv.writer(self.file_handle)
+
+                print(f"✓ Logger appending to: {self.log_file}")
+
+            else:
+                print("⚠ No existing log found, creating new log")
+                self._write_header()
+
+        # ===== NEW TRAINING =====
         else:
-            # Create new log file with header
             self._write_header()
-    
+
     def _write_header(self):
         """Write CSV header"""
+
         self.file_handle = open(self.log_file, 'w', newline='')
         self.csv_writer = csv.writer(self.file_handle)
-        header = ['epoch', 'step', 'train_loss_ins', 'train_loss_cate', 
-                  'val_mPQ', 'val_bPQ', 'is_best', 'timestamp']
+
+        header = [
+            'epoch',
+            'step',
+            'train_loss_ins',
+            'train_loss_cate',
+            'val_mPQ',
+            'val_bPQ',
+            'is_best',
+            'timestamp'
+        ]
+
         self.csv_writer.writerow(header)
         self.file_handle.flush()
-    
-    def log(self, epoch, num_steps, train_loss_ins, train_loss_cate, 
+
+    def log(self, epoch, num_steps, train_loss_ins, train_loss_cate,
             val_mPQ=None, val_bPQ=None, is_best=0):
-        """
-        Log one epoch.
-        
-        Args:
-            epoch: epoch number (0-indexed)
-            num_steps: number of steps in this epoch
-            train_loss_ins: average instance loss
-            train_loss_cate: average category loss
-            val_mPQ: validation mPQ (None if no validation)
-            val_bPQ: validation bPQ (None if no validation)
-            is_best: 1 if best model, 0 otherwise
-        """
+
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
-        # Handle None values for validation metrics
+
         val_mPQ_str = f"{val_mPQ:.6f}" if val_mPQ is not None else ""
         val_bPQ_str = f"{val_bPQ:.6f}" if val_bPQ is not None else ""
-        
-        row = [epoch, num_steps, f"{train_loss_ins:.6f}", f"{train_loss_cate:.6f}",
-               val_mPQ_str, val_bPQ_str, is_best, timestamp]
-        
+
+        row = [
+            epoch,
+            num_steps,
+            f"{train_loss_ins:.6f}",
+            f"{train_loss_cate:.6f}",
+            val_mPQ_str,
+            val_bPQ_str,
+            is_best,
+            timestamp
+        ]
+
         self.csv_writer.writerow(row)
         self.file_handle.flush()
-    
+
     def close(self):
         """Close logger"""
+
         if self.file_handle is not None:
             self.file_handle.close()
 
